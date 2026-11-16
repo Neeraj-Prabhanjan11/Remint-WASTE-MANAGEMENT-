@@ -1,6 +1,6 @@
 # Remint — Smart Waste Management
 
-A full-stack waste recovery web application. The Value Chain is the landing page; Sort & Log, Pickups, Overview, and Impact read and update the same SQLite database. People can create their own accounts, and records are private to the account that created them.
+A full-stack waste recovery web application. The Value Chain is the landing page; Sort & Log, Pickups, Overview, and Impact read and update the same database. People can create their own accounts, and records are private to the account that created them.
 
 ## Run locally
 
@@ -17,13 +17,15 @@ The database is created at `data/remint.sqlite` on first run. Set `DB_PATH` to u
 
 ## Deploy for public access
 
-### GitHub Pages frontend
+### GitHub Pages frontend and Supabase database
 
 Like the HACKARENA example, Remint can publish its frontend through a GitHub Actions Pages workflow. The Remint Pages URL is `https://neeraj-prabhanjan11.github.io/Remint-WASTE-MANAGEMENT-/`. The workflow builds Vite's `dist/` output, including a Pages 404 fallback for sign-in and sign-up routes.
 
-GitHub Pages serves static files only. It cannot run Remint's Node API or database. To enable account sign-in, shared records, and the dashboard modules, first deploy the API on a separate HTTPS host with persistent storage. Then add the repository Actions variable `REMINT_API_URL` with the API's base URL (for example `https://api.example.com`), and configure that API host with `APP_ORIGIN=https://neeraj-prabhanjan11.github.io`. The API allows credentialed requests only from that exact frontend origin and uses secure cross-site session cookies in this mode. Browser privacy settings that block third-party cookies may prevent sign-in across the GitHub Pages and API domains; a same-site custom domain and reverse proxy is the most reliable production setup.
+GitHub Pages serves static files only. It cannot run Remint's Node API or database. The API runs separately on Render and can store its data in Supabase Postgres. Configure the Render service with the Supabase connection string as the secret environment variable `DATABASE_URL`; the API creates/updates its tables on startup. Keep the connection string private and never place it in the frontend, GitHub Pages variables, or source code. The repository Blueprint also expects `APP_ORIGIN=https://neeraj-prabhanjan11.github.io`, and the Pages workflow uses the Actions variable `REMINT_API_URL` for the API's base URL. The API allows credentialed requests only from that exact frontend origin and uses secure cross-site session cookies in this mode. Browser privacy settings that block third-party cookies may prevent sign-in across the GitHub Pages and API domains; a same-site custom domain and reverse proxy is the most reliable production setup.
 
-`render.yaml` provides a free Render web-service Blueprint for the API, configured for Singapore and HTTPS. To create it, sign in at [Render](https://render.com/), choose **New → Blueprint**, select this GitHub repository and the `neeraj-prabhanjan11-waste-value-chain-infographic` branch, then review and apply the blueprint. This free tier uses temporary SQLite storage: records can disappear when Render restarts or redeploys the sleeping service, and the service can take time to wake up after inactivity. Do not rely on it for important or durable records. Once Render finishes creating the service, copy its `https://…onrender.com` URL into the repository Actions variable `REMINT_API_URL` under **Settings → Secrets and variables → Actions → Variables**, then run the **Deploy Remint to GitHub Pages** workflow again. That makes sign-up, login, and database-backed features available through the Pages frontend.
+`render.yaml` provides a free Render web-service Blueprint for the API, configured for Singapore and HTTPS. Create a free Supabase project, then in Supabase open **Project Settings → Database → Connection string** and select the **Session pooler** connection string. In Render, open the Remint API service's **Environment** settings and save that full URI as `DATABASE_URL` (do not share it in chat). Redeploy the service; it creates the tables in `supabase/schema.sql` automatically on startup. The existing Render SQLite database is not copied into Supabase, so any records/accounts there remain separate; create a new account on the Supabase-backed API after it is configured. Supabase free projects may pause after inactivity, and the free tier has usage limits. Once the API is ready, copy its `https://…onrender.com` URL into the repository Actions variable `REMINT_API_URL` under **Settings → Secrets and variables → Actions → Variables**, then run the **Deploy Remint to GitHub Pages** workflow again.
+
+The Supabase connection string is not available to this repository until you create a project and add it to Render. Until then, the current hosted API continues to use its existing configuration; the Supabase switch is not active and existing public-site accounts/data are not migrated.
 
 The Pages workflow runs on pushes to `main` or the deployment branch and can also be started manually from the repository's Actions tab. Until the API service is created and its URL configured, the page displays a setup notice instead of pretending that account or database features are available.
 

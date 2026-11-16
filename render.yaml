@@ -16,5 +16,7 @@ services:
         value: 0.0.0.0
       - key: DB_PATH
         value: /tmp/remint.sqlite
+      - key: DATABASE_URL
+        sync: false
       - key: APP_ORIGIN
         value: https://neeraj-prabhanjan11.github.io

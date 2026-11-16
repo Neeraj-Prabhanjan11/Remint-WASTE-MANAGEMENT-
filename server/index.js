@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
+import { createPostgresDatabase } from './postgres.js';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -150,32 +151,33 @@ function sessionToken(req) {
   return token && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
 
-function authenticate(db, req) {
+async function authenticate(db, req) {
   const token = sessionToken(req);
   if (!token) return null;
   const tokenHash = createHash('sha256').update(token).digest('hex');
-  const row = db.prepare(`
+  const row = await db.prepare(`
     SELECT u.id, u.name, u.email, u.organization
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?
   `).get(tokenHash, new Date().toISOString());
-  if (!row) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
+  if (!row) await db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
   return row || null;
 }
 
-function createSession(db, userId) {
+async function createSession(db, userId) {
   const token = randomBytes(32).toString('base64url');
   const now = new Date();
   const expiresAt = new Date(now.getTime() + sessionLifetimeMs).toISOString();
-  db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
     .run(createHash('sha256').update(token).digest('hex'), userId, expiresAt, now.toISOString());
   return token;
 }
 
-function withTransaction(db, action) {
+async function withTransaction(db, action) {
+  if (db.transaction) return db.transaction(action);
   db.exec('BEGIN IMMEDIATE');
   try {
-    const result = action();
+    const result = await action(db);
     db.exec('COMMIT');
     return result;
   } catch (error) {
@@ -187,12 +189,12 @@ function withTransaction(db, action) {
 async function handleAuth(db, req, res, url, crossOrigin) {
   const method = req.method || 'GET';
   if (url.pathname === '/api/auth/me' && method === 'GET') {
-    const user = authenticate(db, req);
+    const user = await authenticate(db, req);
     return user ? json(res, 200, { user }) : json(res, 401, { error: 'Please sign in to continue.' });
   }
   if (url.pathname === '/api/auth/logout' && method === 'POST') {
     const token = sessionToken(req);
-    if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(createHash('sha256').update(token).digest('hex'));
+    if (token) await db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(createHash('sha256').update(token).digest('hex'));
     return json(res, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0, crossOrigin) });
   }
   if ((url.pathname === '/api/auth/signup' || url.pathname === '/api/auth/login') && method === 'POST') {
@@ -207,37 +209,37 @@ async function handleAuth(db, req, res, url, crossOrigin) {
     if (signup) {
       const name = requiredText(body.name, 'Name', 100);
       const organization = typeof body.organization === 'string' ? body.organization.trim().slice(0, 120) : '';
-      const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
+      const userCount = (await db.prepare('SELECT COUNT(*) AS count FROM users').get()).count;
       const now = new Date().toISOString();
       const salt = randomBytes(16).toString('base64');
       const passwordHash = passwordDigest(password, salt);
-      const result = withTransaction(db, () => {
-        if (db.prepare('SELECT 1 FROM users WHERE email = ? COLLATE NOCASE').get(email)) {
+      const result = await withTransaction(db, async (tx) => {
+        if (await tx.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
           return { conflict: true };
         }
-        const inserted = db.prepare(`
+        const inserted = await tx.prepare(`
           INSERT INTO users (name, email, organization, password_salt, password_hash, created_at)
           VALUES (?, ?, ?, ?, ?, ?)
         `).run(name, email, organization, salt, passwordHash, now);
         const userId = Number(inserted.lastInsertRowid);
-        const legacyFactors = db.prepare('SELECT co2_per_recovered_kg, co2_per_compost_kg FROM impact_factors WHERE id = 1').get();
-        db.prepare(`
+        const legacyFactors = await tx.prepare('SELECT co2_per_recovered_kg, co2_per_compost_kg FROM impact_factors WHERE id = 1').get();
+        await tx.prepare(`
           INSERT INTO user_impact_factors (user_id, co2_per_recovered_kg, co2_per_compost_kg, updated_at)
           VALUES (?, ?, ?, ?)
         `).run(userId, legacyFactors.co2_per_recovered_kg, legacyFactors.co2_per_compost_kg, now);
         if (!userCount) {
-          db.prepare('UPDATE pickups SET user_id = ? WHERE user_id IS NULL').run(userId);
-          db.prepare('UPDATE waste_logs SET user_id = ? WHERE user_id IS NULL').run(userId);
+          await tx.prepare('UPDATE pickups SET user_id = ? WHERE user_id IS NULL').run(userId);
+          await tx.prepare('UPDATE waste_logs SET user_id = ? WHERE user_id IS NULL').run(userId);
         }
-        const session = createSession(db, userId);
-        const account = db.prepare('SELECT id, name, email, organization FROM users WHERE id = ?').get(userId);
+        const session = await createSession(tx, userId);
+        const account = await tx.prepare('SELECT id, name, email, organization FROM users WHERE id = ?').get(userId);
         return { account, session };
       });
       if (result.conflict) return json(res, 409, { error: 'An account with that email already exists. Try signing in instead.' });
       user = result.account;
       token = result.session;
     } else {
-      const account = db.prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').get(email);
+      const account = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
       const salt = account?.password_salt || 'remint-dummy-salt';
       const expected = account ? Buffer.from(account.password_hash, 'base64') : Buffer.alloc(64);
       const actual = Buffer.from(passwordDigest(password, salt), 'base64');
@@ -245,7 +247,7 @@ async function handleAuth(db, req, res, url, crossOrigin) {
         return json(res, 401, { error: 'Email or password is incorrect.' });
       }
       user = publicUser(account);
-      token = createSession(db, user.id);
+      token = await createSession(db, user.id);
     }
     authAttempts.delete(clientKey(req, action));
     return json(res, signup ? 201 : 200, { user }, { 'set-cookie': sessionCookie(token, sessionLifetimeMs / 1000, crossOrigin) });
@@ -340,13 +342,13 @@ function dateRange(url) {
   return [start.toISOString(), end.toISOString()];
 }
 
-function impactReport(db, url, userId) {
+async function impactReport(db, url, userId) {
   const [from, to] = dateRange(url);
-  const rows = db.prepare(`
+  const rows = await db.prepare(`
     SELECT category, quantity_kg, recovered_kg, compost_kg, resource_value_inr, scrap_dealer_income_inr, logged_at
     FROM waste_logs WHERE user_id = ? AND logged_at BETWEEN ? AND ? ORDER BY logged_at
   `).all(userId, from, to);
-  const factors = db.prepare('SELECT co2_per_recovered_kg, co2_per_compost_kg FROM user_impact_factors WHERE user_id = ?').get(userId);
+  const factors = await db.prepare('SELECT co2_per_recovered_kg, co2_per_compost_kg FROM user_impact_factors WHERE user_id = ?').get(userId);
   const totalWasteKg = rows.reduce((sum, row) => sum + row.quantity_kg, 0);
   const recoveredKg = rows.reduce((sum, row) => sum + row.recovered_kg, 0);
   const compostKg = rows.reduce((sum, row) => sum + row.compost_kg, 0);
@@ -395,10 +397,10 @@ function csvEscape(value) {
   return /[",\r\n]/.test(string) ? `"${string.replaceAll('"', '""')}"` : string;
 }
 
-function overview(db, userId) {
-  const logs = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(quantity_kg), 0) AS quantity, COALESCE(SUM(recovered_kg + compost_kg), 0) AS diversion FROM waste_logs WHERE user_id = ?').get(userId);
-  const pickups = db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'Scheduled' THEN 1 ELSE 0 END) AS scheduled, SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed FROM pickups WHERE user_id = ?").get(userId);
-  const categoriesResult = db.prepare('SELECT category, SUM(quantity_kg) AS quantityKg, SUM(recovered_kg + compost_kg) AS divertedKg, SUM(resource_value_inr) AS resourceValueInr, SUM(scrap_dealer_income_inr) AS dealerIncomeInr FROM waste_logs WHERE user_id = ? GROUP BY category').all(userId);
+async function overview(db, userId) {
+  const logs = await db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(quantity_kg), 0) AS quantity, COALESCE(SUM(recovered_kg + compost_kg), 0) AS diversion FROM waste_logs WHERE user_id = ?').get(userId);
+  const pickups = await db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'Scheduled' THEN 1 ELSE 0 END) AS scheduled, SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed FROM pickups WHERE user_id = ?").get(userId);
+  const categoriesResult = await db.prepare('SELECT category, SUM(quantity_kg) AS "quantityKg", SUM(recovered_kg + compost_kg) AS "divertedKg", SUM(resource_value_inr) AS "resourceValueInr", SUM(scrap_dealer_income_inr) AS "dealerIncomeInr" FROM waste_logs WHERE user_id = ? GROUP BY category').all(userId);
   return {
     logCount: logs.count,
     totalWasteKg: logs.quantity,
@@ -439,13 +441,13 @@ export function createApiServer(db, { appOrigin = process.env.APP_ORIGIN || '' }
       }
       if (url.pathname === '/api/health') return json(res, 200, { ok: true });
       if (url.pathname.startsWith('/api/auth/')) return await handleAuth(db, req, res, url, Boolean(allowedAppOrigin));
-      const user = authenticate(db, req);
+      const user = await authenticate(db, req);
       if (!user) return json(res, 401, { error: 'Please sign in to continue.' });
-      if (url.pathname === '/api/overview' && method === 'GET') return json(res, 200, overview(db, user.id));
+      if (url.pathname === '/api/overview' && method === 'GET') return json(res, 200, await overview(db, user.id));
       if (url.pathname === '/api/logs' && method === 'GET') {
         const search = (url.searchParams.get('q') || '').trim().toLowerCase();
         const category = url.searchParams.get('category') || '';
-        const rows = db.prepare(`
+        const rows = await db.prepare(`
           SELECT l.*, p.location AS pickup_location
           FROM waste_logs l LEFT JOIN pickups p ON p.id = l.pickup_id
           WHERE l.user_id = ? AND (? = '' OR lower(l.category) LIKE ? OR lower(l.source) LIKE ? OR lower(l.description) LIKE ?)
@@ -457,26 +459,26 @@ export function createApiServer(db, { appOrigin = process.env.APP_ORIGIN || '' }
       if (url.pathname === '/api/logs' && method === 'POST') {
         const log = validateLog(await readBody(req));
         const now = new Date().toISOString();
-        const result = db.prepare(`
+        const result = await db.prepare(`
           INSERT INTO waste_logs (user_id, category, quantity_kg, source, sorting_method, description, logged_at, recovered_kg, compost_kg, resource_value_inr, scrap_dealer_income_inr, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(user.id, log.category, log.quantity, log.source, log.method, log.description, log.loggedAt, log.recovered, log.compost, log.resourceValue, log.dealerIncome, now, now);
-        return json(res, 201, db.prepare('SELECT * FROM waste_logs WHERE id = ? AND user_id = ?').get(result.lastInsertRowid, user.id));
+        return json(res, 201, await db.prepare('SELECT * FROM waste_logs WHERE id = ? AND user_id = ?').get(result.lastInsertRowid, user.id));
       }
       if (logMatch && method === 'PUT') {
         const log = validateLog(await readBody(req));
-        const result = db.prepare(`
+        const result = await db.prepare(`
           UPDATE waste_logs SET category = ?, quantity_kg = ?, source = ?, sorting_method = ?, description = ?, logged_at = ?, recovered_kg = ?, compost_kg = ?, resource_value_inr = ?, scrap_dealer_income_inr = ?, updated_at = ?
           WHERE id = ? AND user_id = ?
         `).run(log.category, log.quantity, log.source, log.method, log.description, log.loggedAt, log.recovered, log.compost, log.resourceValue, log.dealerIncome, new Date().toISOString(), Number(logMatch[1]), user.id);
         if (!result.changes) return json(res, 404, { error: 'Waste record not found.' });
-        return json(res, 200, db.prepare('SELECT * FROM waste_logs WHERE id = ? AND user_id = ?').get(Number(logMatch[1]), user.id));
+        return json(res, 200, await db.prepare('SELECT * FROM waste_logs WHERE id = ? AND user_id = ?').get(Number(logMatch[1]), user.id));
       }
       if (logMatch && method === 'DELETE') {
-        const linked = db.prepare('SELECT pickup_id FROM waste_logs WHERE id = ? AND user_id = ?').get(Number(logMatch[1]), user.id);
+        const linked = await db.prepare('SELECT pickup_id FROM waste_logs WHERE id = ? AND user_id = ?').get(Number(logMatch[1]), user.id);
         if (!linked) return json(res, 404, { error: 'Waste record not found.' });
         if (linked?.pickup_id) return json(res, 409, { error: 'This log was created from a completed pickup. Delete the pickup to keep its history together.' });
-        const result = db.prepare('DELETE FROM waste_logs WHERE id = ? AND user_id = ?').run(Number(logMatch[1]), user.id);
+        const result = await db.prepare('DELETE FROM waste_logs WHERE id = ? AND user_id = ?').run(Number(logMatch[1]), user.id);
         if (!result.changes) return json(res, 404, { error: 'Waste record not found.' });
         return json(res, 200, { ok: true });
       }
@@ -484,7 +486,7 @@ export function createApiServer(db, { appOrigin = process.env.APP_ORIGIN || '' }
         const search = (url.searchParams.get('q') || '').trim().toLowerCase();
         const status = url.searchParams.get('status') || '';
         const [from, to] = dateRange(url);
-        const rows = db.prepare(`
+        const rows = await db.prepare(`
           SELECT * FROM pickups WHERE user_id = ? AND (? = '' OR lower(location) LIKE ? OR lower(category) LIKE ? OR lower(collector) LIKE ?)
             AND (? = '' OR status = ?) AND pickup_at BETWEEN ? AND ?
           ORDER BY pickup_at DESC, id DESC
@@ -495,14 +497,14 @@ export function createApiServer(db, { appOrigin = process.env.APP_ORIGIN || '' }
         const pickup = validatePickup(await readBody(req));
         if (pickup.status === 'Completed') return json(res, 400, { error: 'A pickup must be scheduled and weighed before it can be completed.' });
         const now = new Date().toISOString();
-        const result = db.prepare(`
+        const result = await db.prepare(`
           INSERT INTO pickups (user_id, location, category, estimated_quantity_kg, pickup_at, source, collector, status, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(user.id, pickup.location, pickup.category, pickup.estimatedQuantity, pickup.pickupAt, pickup.source, pickup.collector, pickup.status, now, now);
-        return json(res, 201, db.prepare('SELECT * FROM pickups WHERE id = ? AND user_id = ?').get(result.lastInsertRowid, user.id));
+        return json(res, 201, await db.prepare('SELECT * FROM pickups WHERE id = ? AND user_id = ?').get(result.lastInsertRowid, user.id));
       }
       if (pickupMatch && method === 'GET') {
-        const row = db.prepare(`
+        const row = await db.prepare(`
           SELECT p.*, l.id AS waste_log_id FROM pickups p LEFT JOIN waste_logs l ON l.pickup_id = p.id WHERE p.id = ? AND p.user_id = ?
         `).get(Number(pickupMatch[1]), user.id);
         return row ? json(res, 200, row) : json(res, 404, { error: 'Pickup not found.' });
@@ -511,54 +513,48 @@ export function createApiServer(db, { appOrigin = process.env.APP_ORIGIN || '' }
         const id = Number(pickupMatch[1]);
         const body = await readBody(req);
         const pickup = validatePickup(body);
-        const current = db.prepare('SELECT * FROM pickups WHERE id = ? AND user_id = ?').get(id, user.id);
+        const current = await db.prepare('SELECT * FROM pickups WHERE id = ? AND user_id = ?').get(id, user.id);
         if (!current) return json(res, 404, { error: 'Pickup not found.' });
         if (current.status === 'Completed') return json(res, 409, { error: 'Completed pickups are historical records. Edit the linked waste log to update recovery details.' });
         const actual = pickup.status === 'Completed' ? number(body.actualQuantityKg, 'Actual quantity', { required: true, min: 0.01 }) : null;
         const now = new Date().toISOString();
-        const tx = db.prepare('BEGIN IMMEDIATE');
-        tx.run();
-        try {
-          db.prepare(`
+        await withTransaction(db, async (tx) => {
+          await tx.prepare(`
             UPDATE pickups SET location = ?, category = ?, estimated_quantity_kg = ?, actual_quantity_kg = COALESCE(?, actual_quantity_kg), pickup_at = ?, source = ?, collector = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?
           `).run(pickup.location, pickup.category, pickup.estimatedQuantity, actual, pickup.pickupAt, pickup.source, pickup.collector, pickup.status, now, id, user.id);
           if (pickup.status === 'Completed') {
-            const existing = db.prepare('SELECT id FROM waste_logs WHERE pickup_id = ? AND user_id = ?').get(id, user.id);
+            const existing = await tx.prepare('SELECT id FROM waste_logs WHERE pickup_id = ? AND user_id = ?').get(id, user.id);
             const logData = [pickup.category, actual, pickup.source, 'Pickup weighing', `Collected at ${pickup.location}${pickup.collector ? ` by ${pickup.collector}` : ''}`, now, now];
             if (existing) {
-              db.prepare(`
+              await tx.prepare(`
                 UPDATE waste_logs SET category = ?, quantity_kg = ?, source = ?, sorting_method = ?, description = ?, logged_at = ?, updated_at = ? WHERE pickup_id = ? AND user_id = ?
               `).run(...logData, id, user.id);
             } else {
-              db.prepare(`
+              await tx.prepare(`
                 INSERT INTO waste_logs (user_id, pickup_id, category, quantity_kg, source, sorting_method, description, logged_at, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               `).run(user.id, id, ...logData.slice(0, 6), now, now);
             }
           }
-          db.prepare('COMMIT').run();
-        } catch (error) {
-          db.prepare('ROLLBACK').run();
-          throw error;
-        }
-        return json(res, 200, db.prepare('SELECT * FROM pickups WHERE id = ? AND user_id = ?').get(id, user.id));
+        });
+        return json(res, 200, await db.prepare('SELECT * FROM pickups WHERE id = ? AND user_id = ?').get(id, user.id));
       }
       if (pickupMatch && method === 'DELETE') {
-        const result = db.prepare('DELETE FROM pickups WHERE id = ? AND user_id = ?').run(Number(pickupMatch[1]), user.id);
+        const result = await db.prepare('DELETE FROM pickups WHERE id = ? AND user_id = ?').run(Number(pickupMatch[1]), user.id);
         if (!result.changes) return json(res, 404, { error: 'Pickup not found.' });
         return json(res, 200, { ok: true });
       }
-      if (url.pathname === '/api/impact' && method === 'GET') return json(res, 200, impactReport(db, url, user.id));
+      if (url.pathname === '/api/impact' && method === 'GET') return json(res, 200, await impactReport(db, url, user.id));
       if (url.pathname === '/api/impact/factors' && method === 'PUT') {
         const body = await readBody(req);
         const recoveredFactor = number(body.co2PerRecoveredKg, 'Recovered-material CO2 factor');
         const compostFactor = number(body.co2PerCompostKg, 'Compost CO2 factor');
         if (recoveredFactor > 20 || compostFactor > 20) return json(res, 400, { error: 'Factors must be between 0 and 20 kg CO₂ per kg.' });
-        db.prepare('UPDATE user_impact_factors SET co2_per_recovered_kg = ?, co2_per_compost_kg = ?, updated_at = ? WHERE user_id = ?').run(recoveredFactor, compostFactor, new Date().toISOString(), user.id);
-        return json(res, 200, db.prepare('SELECT co2_per_recovered_kg AS co2PerRecoveredKg, co2_per_compost_kg AS co2PerCompostKg FROM user_impact_factors WHERE user_id = ?').get(user.id));
+        await db.prepare('UPDATE user_impact_factors SET co2_per_recovered_kg = ?, co2_per_compost_kg = ?, updated_at = ? WHERE user_id = ?').run(recoveredFactor, compostFactor, new Date().toISOString(), user.id);
+        return json(res, 200, await db.prepare('SELECT co2_per_recovered_kg AS "co2PerRecoveredKg", co2_per_compost_kg AS "co2PerCompostKg" FROM user_impact_factors WHERE user_id = ?').get(user.id));
       }
       if (url.pathname === '/api/impact/export.csv' && method === 'GET') {
-        const rows = db.prepare(`
+        const rows = await db.prepare(`
           SELECT category, quantity_kg, recovered_kg, compost_kg, resource_value_inr, scrap_dealer_income_inr, logged_at, source, sorting_method
           FROM waste_logs WHERE user_id = ? AND logged_at BETWEEN ? AND ? ORDER BY logged_at
         `).all(user.id, ...dateRange(url));
@@ -622,16 +618,37 @@ async function serveApp(req, res) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  initializeDatabase(db);
-  const server = createApiServer(db);
-  const port = Number(process.env.PORT || 4179);
-  const host = process.env.HOST || '127.0.0.1';
-  server.listen(port, host, () => console.log(`Remint server listening on ${host}:${port}`));
-  const shutdown = () => {
-    server.close(() => db.close());
+  const start = async () => {
+    let db;
+    if (process.env.DATABASE_URL) {
+      db = createPostgresDatabase(process.env.DATABASE_URL);
+      try {
+        await db.query(await readFile(resolve(root, 'supabase', 'schema.sql'), 'utf8'));
+      } catch (error) {
+        await db.close();
+        throw error;
+      }
+    } else {
+      mkdirSync(dirname(dbPath), { recursive: true });
+      db = new DatabaseSync(dbPath);
+      initializeDatabase(db);
+    }
+
+    const server = createApiServer(db);
+    const port = Number(process.env.PORT || 4179);
+    const host = process.env.HOST || '127.0.0.1';
+    server.listen(port, host, () => console.log(`Remint server listening on ${host}:${port}`));
+    const shutdown = () => {
+      server.close(() => {
+        if (db.close) db.close();
+        else void db.close();
+      });
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  start().catch((error) => {
+    console.error('Could not start the Remint API:', error);
+    process.exitCode = 1;
+  });
 }
