@@ -146,6 +146,9 @@ function sessionCookie(token, maxAge, crossOrigin) {
 }
 
 function sessionToken(req) {
+  const authorization = req.headers.authorization || '';
+  const bearer = authorization.match(/^Bearer ([A-Za-z0-9_-]{43})$/);
+  if (bearer) return bearer[1];
   const value = req.headers.cookie?.split(';').map((item) => item.trim()).find((item) => item.startsWith('remint_session='));
   const token = value?.slice('remint_session='.length);
   return token && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
@@ -250,7 +253,10 @@ async function handleAuth(db, req, res, url, crossOrigin) {
       token = await createSession(db, user.id);
     }
     authAttempts.delete(clientKey(req, action));
-    return json(res, signup ? 201 : 200, { user }, { 'set-cookie': sessionCookie(token, sessionLifetimeMs / 1000, crossOrigin) });
+    return json(res, signup ? 201 : 200, {
+      user,
+      ...(crossOrigin ? { sessionToken: token } : {}),
+    }, { 'set-cookie': sessionCookie(token, sessionLifetimeMs / 1000, crossOrigin) });
   }
   return json(res, 404, { error: 'Authentication route not found.' });
 }
@@ -431,7 +437,7 @@ export function createApiServer(db, { appOrigin = process.env.APP_ORIGIN || '' }
         res.setHeader('access-control-allow-origin', allowedAppOrigin);
         res.setHeader('access-control-allow-credentials', 'true');
         res.setHeader('access-control-allow-methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.setHeader('access-control-allow-headers', 'Content-Type');
+        res.setHeader('access-control-allow-headers', 'Content-Type, Authorization');
         res.setHeader('vary', 'Origin');
       }
       if (method === 'OPTIONS' && url.pathname.startsWith('/api/')) {

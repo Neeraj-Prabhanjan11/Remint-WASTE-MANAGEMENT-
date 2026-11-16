@@ -50,7 +50,7 @@ test('GitHub Pages API access allows only the configured origin', async () => {
     headers: {
       origin: 'https://neeraj-prabhanjan11.github.io',
       'access-control-request-method': 'POST',
-      'access-control-request-headers': 'content-type',
+      'access-control-request-headers': 'content-type, authorization',
     },
   });
   assert.equal(preflight.status, 204);
@@ -85,6 +85,29 @@ test('waste logs validate, persist, update overview, and delete', async () => {
   assert.equal(removed.response.status, 200);
   summary = await api('/api/overview');
   assert.equal(summary.body.logCount, 0);
+});
+
+test('cross-origin clients can authenticate with the session token when cookies are unavailable', async () => {
+  const origin = 'https://neeraj-prabhanjan11.github.io';
+  const signup = await fetch(`${baseUrl}/api/auth/signup`, {
+    method: 'POST',
+    headers: { origin, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Token Member',
+      email: 'token-member@example.org',
+      password: 'secure-token-passphrase-2026',
+    }),
+  });
+  const result = await signup.json();
+  assert.equal(signup.status, 201);
+  assert.match(result.sessionToken, /^[A-Za-z0-9_-]{43}$/);
+
+  const headers = { origin, authorization: `Bearer ${result.sessionToken}` };
+  const currentUser = await fetch(`${baseUrl}/api/auth/me`, { headers });
+  assert.equal(currentUser.status, 200);
+  assert.equal((await currentUser.json()).user.email, 'token-member@example.org');
+  const dashboard = await fetch(`${baseUrl}/api/overview`, { headers });
+  assert.equal(dashboard.status, 200);
 });
 
 test('completed pickup requires a measured weight and creates one linked waste log', async () => {

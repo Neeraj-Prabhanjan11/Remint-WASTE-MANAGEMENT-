@@ -44,7 +44,7 @@ This Docker setup is a single-instance deployment: keep one app replica because 
 
 ## Accounts and workspace privacy
 
-Create an account or sign in at `/signup` and `/login`. Waste logs, pickups, and impact factors are scoped to the signed-in account. Passwords are stored as salted scrypt hashes, and the browser receives an HttpOnly, SameSite=Lax session cookie with a 30-day lifetime. The light/dark preference is saved in that browser.
+Create an account or sign in at `/signup` and `/login`. Waste logs, pickups, and impact factors are scoped to the signed-in account. Passwords are stored as salted scrypt hashes. Sessions last 30 days; same-origin deployments use an HttpOnly cookie, while the GitHub Pages/API cross-origin setup also keeps a bearer token in tab-scoped session storage so sign-in works when Chrome blocks third-party cookies. Signing out clears the session. The light/dark preference is saved in that browser.
 
 The account system supports public self-registration but does not currently provide email verification, password reset, multi-factor authentication, or account recovery. Use a strong unique password. Before relying on the service for sensitive or business-critical data, arrange backups and monitoring, review the authentication and rate-limiting setup for your hosting environment, and add appropriate account recovery and support processes.
 

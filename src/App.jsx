@@ -39,8 +39,13 @@ const categoryColor = (category) => ({
 }[category] || 'slate');
 
 async function request(path, options) {
+  const token = sessionStorage.getItem('remint_session_token');
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
+    headers: {
+      ...options?.headers,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     credentials: API_BASE_URL ? 'include' : 'same-origin',
   });
   const contentType = response.headers.get('content-type') || '';
@@ -154,6 +159,7 @@ function App() {
 
   const handleApiError = (cause) => {
     if (cause.status === 401) {
+      sessionStorage.removeItem('remint_session_token');
       setUser(null);
       setLogs([]);
       setPickups([]);
@@ -253,6 +259,7 @@ function App() {
   const signOut = async () => {
     try {
       await request('/api/auth/logout', { method: 'POST' });
+      sessionStorage.removeItem('remint_session_token');
       setUser(null);
       setOverview(null);
       setLogs([]);
@@ -388,6 +395,7 @@ function AuthPage({ mode, theme, error, onError, onModeChange, onThemeChange, on
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(values),
       });
+      if (result.sessionToken) sessionStorage.setItem('remint_session_token', result.sessionToken);
       onAuthenticated(result.user);
     } catch (cause) {
       setFormError(cause.message);
