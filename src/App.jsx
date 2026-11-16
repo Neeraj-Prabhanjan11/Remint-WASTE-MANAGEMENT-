@@ -160,7 +160,7 @@ function App() {
       setOverview(null);
       setImpact(null);
       setAuthMode('login');
-      setError('Your session is no longer valid. Please sign in again. Accounts created before the database upgrade were not transferred; create a new account if needed.');
+      setError('Your previous session has expired. Please sign in again.');
       window.history.replaceState({}, '', appPath('login'));
       return;
     }
