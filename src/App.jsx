@@ -160,7 +160,7 @@ function App() {
       setOverview(null);
       setImpact(null);
       setAuthMode('login');
-      setError('Your previous session has expired. Please sign in again.');
+      setError('');
       window.history.replaceState({}, '', appPath('login'));
       return;
     }
