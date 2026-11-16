@@ -432,6 +432,7 @@ function AuthPage({ mode, theme, error, onError, onModeChange, onThemeChange, on
           <div className="auth-card-kicker">{signup ? 'GROW THE RECOVERY NETWORK' : 'YOUR RECOVERY WORKSPACE'}</div>
           <h2>{signup ? 'Join the loop.' : 'Welcome back.'}</h2>
           <p className="auth-card-description">{signup ? 'Create your account and start building local value together.' : 'Sign in to pick up where your community left off.'}</p>
+          {!signup && <div className="auth-note" role="note">Remint’s database was upgraded. Accounts created before the upgrade were not transferred, so please <button type="button" onClick={() => onModeChange('signup')}>create a new account</button>.</div>}
           {(formError || error) && <div className="auth-error" role="alert"><CircleAlert size={16} /><span>{formError || error}</span></div>}
           <form className="auth-form" onSubmit={submit}>
             {signup && <label>Full name<div className="auth-input-wrap"><UserRound size={16} /><input autoComplete="name" name="name" type="text" required maxLength="100" value={values.name} onChange={(event) => change('name', event.target.value)} placeholder="Your name" /></div></label>}

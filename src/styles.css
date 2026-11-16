@@ -497,6 +497,9 @@ td:first-child, th:first-child { padding-left: 17px; }
 .auth-error { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 13px; padding: 9px 10px; border: 1px solid #f0d7d2; border-radius: 7px; background: #fff4f1; color: #a5564a; font-size: 8px; line-height: 1.45; }
 :root[data-theme='dark'] .auth-error { border-color: #5c3a35; background: #382723; color: #e2a99d; }
 .auth-error svg { flex: 0 0 auto; }
+.auth-note { margin: 0 0 13px; padding: 9px 10px; border: 1px solid #dce9df; border-radius: 7px; background: #f2f8f3; color: #42634a; font-size: 8px; line-height: 1.5; }
+:root[data-theme='dark'] .auth-note { border-color: #34503b; background: #202f25; color: #b4d2ba; }
+.auth-note button { padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .auth-switch { margin-top: 18px; color: var(--muted); font-size: 9px; text-align: center; }
 .auth-switch button { padding: 0; border: 0; background: transparent; color: var(--green); font-size: inherit; font-weight: 700; cursor: pointer; }
 .auth-switch button:hover { text-decoration: underline; }
