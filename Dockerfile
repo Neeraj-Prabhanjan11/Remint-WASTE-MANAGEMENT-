@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY index.html vite.config.js ./
+COPY scripts ./scripts
 COPY src ./src
 RUN npm run build
 
@@ -15,7 +16,10 @@ ENV HOST=0.0.0.0
 ENV DB_PATH=/data/remint.sqlite
 WORKDIR /app
 
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY --chown=node:node server ./server
+COPY --chown=node:node supabase ./supabase
 COPY --from=build --chown=node:node /app/dist ./dist
 RUN mkdir -p /data && chown node:node /data
 
