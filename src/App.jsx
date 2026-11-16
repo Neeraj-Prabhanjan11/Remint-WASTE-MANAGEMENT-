@@ -152,6 +152,21 @@ function App() {
     setImpact(await request(`/api/impact?${params}`));
   }, [range, reportPeriod]);
 
+  const handleApiError = (cause) => {
+    if (cause.status === 401) {
+      setUser(null);
+      setLogs([]);
+      setPickups([]);
+      setOverview(null);
+      setImpact(null);
+      setAuthMode('login');
+      setError('Your session is no longer valid. Please sign in again. If the free API restarted and cleared its temporary data, create a new account.');
+      window.history.replaceState({}, '', appPath('login'));
+      return;
+    }
+    setError(cause.message);
+  };
+
   useEffect(() => {
     if (PAGES_BACKEND_MISSING) {
       setAuthLoading(false);
@@ -177,14 +192,14 @@ function App() {
     setLoading(true);
     refresh()
       .then(() => { if (active) setError(''); })
-      .catch((cause) => { if (active) setError(cause.message); })
+      .catch((cause) => { if (active) handleApiError(cause); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [refresh, user]);
 
   useEffect(() => {
     if (!user) return;
-    refreshImpact().catch((cause) => setError(cause.message));
+    refreshImpact().catch(handleApiError);
   }, [refreshImpact, logs, user]);
 
   useEffect(() => {
@@ -208,7 +223,7 @@ function App() {
       return true;
     } catch (cause) {
       setToast('');
-      setError(cause.message);
+      handleApiError(cause);
       return false;
     } finally {
       setBusy(false);
@@ -326,9 +341,9 @@ function App() {
           ) : !overview ? (
             <div className="connection-card">
               <CircleAlert size={24} />
-              <h2>Couldn’t reach the local database</h2>
-              <p>Make sure the Remint app and its API are running. Your records stay in the local SQLite database.</p>
-              <button type="button" className="button button-primary" onClick={() => { setLoading(true); refresh().catch((cause) => setError(cause.message)).finally(() => setLoading(false)); }}>Try again</button>
+              <h2>Couldn’t reach the Remint API</h2>
+              <p>The free API may be waking after inactivity. Try again in a moment. Free-tier data is temporary and can be cleared when the service restarts.</p>
+              <button type="button" className="button button-primary" onClick={() => { setLoading(true); refresh().catch(handleApiError).finally(() => setLoading(false)); }}>Try again</button>
             </div>
           ) : (
             <>
@@ -336,7 +351,7 @@ function App() {
               {page === 'value-chain' && <ValueChainPage overview={overview} logs={logs} pickups={pickups} onNavigate={navigate} />}
               {page === 'sort' && <SortPage logs={logs} busy={busy} onMutation={runMutation} />}
               {page === 'pickups' && <PickupsPage pickups={pickups} busy={busy} onMutation={runMutation} />}
-              {page === 'impact' && <ImpactPage impact={impact} range={range} period={reportPeriod} busy={busy} onRange={setRange} onPeriod={(period) => { setReportPeriod(period); setRange(defaultRange(period)); }} onMutation={runMutation} onError={setError} />}
+              {page === 'impact' && <ImpactPage impact={impact} range={range} period={reportPeriod} busy={busy} onRange={setRange} onPeriod={(period) => { setReportPeriod(period); setRange(defaultRange(period)); }} onMutation={runMutation} onError={handleApiError} />}
             </>
           )}
         </main>
