@@ -6,12 +6,9 @@ A full-stack waste recovery web application. The Value Chain is the landing page
 
 Requires Node.js 22.13 or newer (the server uses the built-in `node:sqlite` module).
 
-```sh
-npm install
-npm run dev
+```USE THIS LINK FOR PROTOTYPE
+https://neeraj-prabhanjan11.github.io/Remint-WASTE-MANAGEMENT-/signup
 ```
-
-Open the local URL printed by Vite. The development command starts both the Vite frontend and the SQLite API. For a production build, run `npm run build`, then `npm run server`.
 
 The database is created at `data/remint.sqlite` on first run. Set `DB_PATH` to use a different SQLite file, and `PORT` to change the API port (default `4179`). No demo records are seeded; each new account starts with an empty workspace.
 
@@ -19,7 +16,7 @@ The database is created at `data/remint.sqlite` on first run. Set `DB_PATH` to u
 
 ### GitHub Pages frontend and Supabase database
 
-Like the HACKARENA example, Remint can publish its frontend through a GitHub Actions Pages workflow. The Remint Pages URL is `https://neeraj-prabhanjan11.github.io/Remint-WASTE-MANAGEMENT-/`. The workflow builds Vite's `dist/` output, including a Pages 404 fallback for sign-in and sign-up routes.
+Like the HACKARENA example, Remint can publish its frontend through a GitHub Actions Pages workflow. The Remint Pages URL is https://neeraj-prabhanjan11.github.io/Remint-WASTE-MANAGEMENT-/signup. The workflow builds Vite's `dist/` output, including a Pages 404 fallback for sign-in and sign-up routes.
 
 GitHub Pages serves static files only. It cannot run Remint's Node API or database. The API runs separately on Render and can store its data in Supabase Postgres. Configure the Render service with the Supabase connection string as the secret environment variable `DATABASE_URL`; the API creates/updates its tables on startup. Keep the connection string private and never place it in the frontend, GitHub Pages variables, or source code. The repository Blueprint also expects `APP_ORIGIN=https://neeraj-prabhanjan11.github.io`, and the Pages workflow uses the Actions variable `REMINT_API_URL` for the API's base URL. The API allows credentialed requests only from that exact frontend origin and uses secure cross-site session cookies in this mode. Browser privacy settings that block third-party cookies may prevent sign-in across the GitHub Pages and API domains; a same-site custom domain and reverse proxy is the most reliable production setup.
 
